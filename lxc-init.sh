@@ -25,7 +25,17 @@ while true; do
 	esac
 done
 
-# Creation du conteneur
+## Gestion des permissions
+sudo -k
+sudo -v
 
-lxc-create -t download -n "$ct_name" -- -d "$distribution" -r "$release" -a "$architecture"
+# Creation Conteneur
+sudo lxc-create -t download -n "$ct_name" -- -d "$distribution" -r "$release" -a "$architecture"
+
+echo "Demarrage du conteneur"
+lxc-start -n "$ct_name"
+
+echo "Arret et suppression"
+lxc-stop "$ct_name"
+lxc-destroy "$ct_name"
 
