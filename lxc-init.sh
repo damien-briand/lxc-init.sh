@@ -33,9 +33,14 @@ sudo -v
 sudo lxc-create -t download -n "$ct_name" -- -d "$distribution" -r "$release" -a "$architecture"
 
 echo "Demarrage du conteneur"
-lxc-start -n "$ct_name"
+sudo lxc-start -n "$ct_name"
+
+echo "Configuration du conteneur"
+sudo lxc-attach -n "$ct_name" -- bash -c "
+uname -a
+"
 
 echo "Arret et suppression"
-lxc-stop "$ct_name"
-lxc-destroy "$ct_name"
+sudo lxc-stop "$ct_name"
+sudo lxc-destroy "$ct_name"
 
