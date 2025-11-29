@@ -76,13 +76,13 @@ done
 [ -x "$(which lxc-create)" ] || error "LXC n'est pas installé. Essayez: sudo apt install lxc" 3
 
 # Demande des droits sudo
-msg "Demande des droits sudo" 10
+msg "### Demande des droits sudo ###" 14
 sudo -k
 sudo -v
 
 # Demande du mot de passe si non fourni
 if [ -z "$password" ]; then
-    msg "Mot de passe pour votre conteneur" 10
+    msg "=== Mot de passe pour votre conteneur ===" 11
 	read -r -s -p "Mot de passe pour l'utilisateur '$username': " password
 	printf "\n"
 	read -r -s -p "Confirmez le mot de passe: " password_confirm
