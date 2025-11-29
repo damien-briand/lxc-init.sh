@@ -1,8 +1,12 @@
 #! /usr/bin/env bash
-
+#
 # Script réaliser par Damien BRIAND
 # INFRES 1A DL
-# Et en toute honnêteté, avec un peux d'aide d'IA
+# J'ai réalisé ce script en toute honnêteté, avec un peux d'aide d'IA
+# J'ai utilisé GitHub Copilot et Claude Anthropic pour :
+# 	- La revue de code
+#	- La création de l'interface graphique avec zenity
+# 	- La résolution de bugs mineurs
 
 set -euo pipefail
 
@@ -18,7 +22,7 @@ password=""
 keyserver="hkp://keyserver.ubuntu.com"
 interface="cli"
 
-# Fonctions Utilitaire
+# Fonctions de messagerie
 msg() {
 	[ -n "${2-}" ] && tput setaf "$2"
 	printf "%s%s\n" "$1" "$c0"
@@ -42,10 +46,8 @@ usage() {
 		    -g, --graphique    : interface graphique avec zenity
 		    -h, --help         : affiche cette aide
 		
-		Note: En mode graphique, lancez le script SANS sudo, il demandera les droits root quand nécessaire
 	EOF
 }
-
 
 # Gestion des options
 opts=$(getopt -o n:u:p:d:r:a:gh --long name:,user:,password:,distribution:,release:,architecture:,graphique,gui-create,help -n "$myself" -- "$@") \
@@ -71,73 +73,182 @@ while true; do
 	esac
 done
 
-# Vérifications
-[ -n "$ct_name" ] || { usage; error "Le nom du conteneur est obligatoire (-n)" 1; }
-[ -x "$(which lxc-create)" ] || error "LXC n'est pas installé. Essayez: sudo apt install lxc" 3
-
 # Demande des droits sudo
 msg "### Demande des droits sudo ###" 14
 sudo -k
 sudo -v
 
-# Demande du mot de passe si non fourni
-if [ -z "$password" ]; then
-    msg "=== Mot de passe pour votre conteneur ===" 11
-	read -r -s -p "Mot de passe pour l'utilisateur '$username': " password
-	printf "\n"
-	read -r -s -p "Confirmez le mot de passe: " password_confirm
-	printf "\n"
-	[ "$password" = "$password_confirm" ] || error "Les mots de passe ne correspondent pas" 4
+# Interface graphique
+gui_interface() {
+	# Vérification de zenity
+	[ -x "$(which zenity)" ] || error "Zenity n'est pas installé. Essayez: sudo apt install zenity" 10
+
+	# Demande du nom du conteneur
+	ct_name=$(zenity --entry \
+		--title="Nom du conteneur" \
+		--text="Entrez le nom du conteneur:" \
+		--entry-text="c1" \
+		--width=400 2>/dev/null)
+	[ -n "$ct_name" ] || { msg "Annulation." 9; exit 0; }
+
+	# Vérifier si le conteneur existe déjà
+	if sudo lxc-ls 2>/dev/null | grep -qw "$ct_name"; then
+		zenity --error --text="Le conteneur '$ct_name' existe déjà !" --width=300 2>/dev/null
+		exit 5
+	fi
+
+	# Demande du nom d'utilisateur
+	username=$(zenity --entry \
+		--title="Nom d'utilisateur" \
+		--text="Entrez le nom d'utilisateur:" \
+		--entry-text="user" \
+		--width=400 2>/dev/null)
+	[ -n "$username" ] || { msg "Annulation." 9; exit 0; }
+
+	# Demande du mot de passe
+	password=$(zenity --password \
+		--title="Mot de passe" \
+		--text="Entrez le mot de passe pour l'utilisateur '$username':" \
+		--width=400 2>/dev/null)
+	[ -n "$password" ] || { msg "Annulation." 9; exit 0; }
+
+	# Choix de la distribution
+	distro_choice=$(zenity --list \
+		--title="Distribution" \
+		--text="Choisissez la distribution:" \
+		--column="Distribution" --column="Version" --column="Architecture" \
+		"debian" "trixie" "amd64" \
+		"debian" "bookworm" "amd64" \
+		"ubuntu" "noble" "amd64" \
+		"ubuntu" "jammy" "amd64" \
+		--width=700 --height=500 --print-column=1,2,3 2>/dev/null)
+	
+	if [ -n "$distro_choice" ]; then
+		distribution=$(echo "$distro_choice" | cut -d'|' -f1)
+		release=$(echo "$distro_choice" | cut -d'|' -f2)
+		architecture=$(echo "$distro_choice" | cut -d'|' -f3)
+	fi
+
+	# Affichage des informations avant création
+	zenity --question \
+		--title="Confirmation" \
+		--text="Création du conteneur avec les paramètres suivants:
+
+		Nom: $ct_name
+		Utilisateur: $username
+		Distribution: $distribution
+		Version: $release
+		Architecture: $architecture
+
+		Voulez-vous continuer ?" \
+	--width=400 2>/dev/null || { msg "Annulation." 9; exit 0; }
+	
+	# Relancer le script en mode root pour la création
+	msg "Lancement de la création du conteneur (sudo requis)..." 11
+	sudo "$0" --name "$ct_name" --user "$username" --password "$password" \
+		--distribution "$distribution" --release "$release" --architecture "$architecture" \
+		--gui-create
+}
+
+# Interface en ligne de commande
+cli_interface() {
+	# Vérification des droits root
+	[ "$(id -u)" -eq 0 ] || error "Ce script doit être exécuté en root (sudo)" 2
+	
+	# Vérification du nom de conteneur
+	[ -n "$ct_name" ] || { usage; error "Le nom du conteneur est obligatoire (-n)" 1; }
+
+	# Vérifier si le conteneur existe déjà
+	if lxc-ls | grep -qw "$ct_name"; then
+		error "Le conteneur '$ct_name' existe déjà" 5
+	fi
+
+	# Demande du mot de passe si non fourni
+	if [ -z "$password" ]; then
+		msg "=== Mot de passe Conteneur ===" 11
+		read -r -s -p "Mot de passe pour l'utilisateur '$username': " password
+		printf "\n"
+		read -r -s -p "Confirmez le mot de passe: " password_confirm
+		printf "\n"
+		[ "$password" = "$password_confirm" ] || error "Les mots de passe ne correspondent pas" 4
+	fi
+}
+
+# Fonction de création du conteneur (toujours en root)
+create_container() {
+	msg "=== Création du conteneur '$ct_name' ===" 11
+	lxc-create -t download -n "$ct_name" -- \
+		-d "$distribution" \
+		-r "$release" \
+		-a "$architecture"
+
+	msg "=== Démarrage du conteneur ===" 11
+	lxc-start -n "$ct_name"
+
+	msg "Attente du démarrage du conteneur..." 10
+	sleep 3
+
+	msg "=== Configuration du conteneur ===" 11
+	lxc-attach -n "$ct_name" -- bash -c "
+		export PATH=\"\$PATH:/sbin:/usr/sbin\"
+		export DEBIAN_FRONTEND=noninteractive
+
+		# Génération de la locale fr_FR.UTF-8
+		echo 'fr_FR.UTF-8 UTF-8' >> /etc/locale.gen
+		locale-gen
+		update-locale LANG=fr_FR.UTF-8
+
+		# Mise à jour et installation des paquets
+		apt update
+		apt install -y ssh sudo
+
+		# Création de l'utilisateur
+		useradd -m -s /bin/bash '$username'
+		echo '$username:$password' | chpasswd
+
+		# Ajout au groupe sudo
+		usermod -aG sudo '$username'
+	"
+
+	msg "=== Conteneur '$ct_name' initialisé avec succès ===" 10
+	msg "Utilisateur: $username" 11
+
+	# Affichage des informations du conteneur
+	ct_ip=$(lxc-ls -f | grep "^$ct_name " | awk '{print $5}')
+	msg "Adresse IP: $ct_ip" 11
+	msg "Connexion SSH: ssh $username@$ct_ip" 11
+	
+	# Si appelé depuis l'interface graphique, afficher une boîte de dialogue
+	if [ -n "${SUDO_USER:-}" ] && [ "$interface" = "gui" ]; then
+		sudo -u "$SUDO_USER" DISPLAY="${DISPLAY:-:0}" zenity --info \
+			--title="Conteneur créé" \
+			--text="Le conteneur '$ct_name' a été créé avec succès !
+
+			Utilisateur: $username
+			Adresse IP: $ct_ip
+			Connexion SSH:
+			ssh $username@$ct_ip" \
+		--width=400 2>/dev/null || true
+	fi
+}
+
+# Vérifier si appelé en mode création depuis l'interface graphique
+if $gui_create_mode; then
+	interface="gui"
+	[ "$(id -u)" -eq 0 ] || error "Cette étape nécessite les droits root" 2
+	[ -x "$(which lxc-create)" ] || error "LXC n'est pas installé. Essayez: sudo apt install lxc" 3
+	create_container
+	exit 0
 fi
 
-# Vérifier si le conteneur existe déjà
-if sudo lxc-ls | grep -qw "$ct_name"; then
-	error "Le conteneur '$ct_name' existe déjà" 5
+# Exécution selon l'interface choisie
+if [ "$interface" = "gui" ]; then
+	gui_interface
+else
+	[ -x "$(which lxc-create)" ] || error "LXC n'est pas installé. Essayez: sudo apt install lxc" 3
+	cli_interface
+	create_container
 fi
-
-msg "=== Création du conteneur '$ct_name' ===" 11
-sudo lxc-create -t download -n "$ct_name" -- \
-	-d "$distribution" \
-	-r "$release" \
-	-a "$architecture"
-
-msg "=== Démarrage du conteneur ===" 11
-sudo lxc-start -n "$ct_name"
-
-msg "Attente du démarrage du conteneur..." 10
-sleep 3
-
-msg "=== Configuration du conteneur ===" 11
-
-# Script d'initialisation exécuté dans le conteneur
-sudo lxc-attach -n "$ct_name" -- bash -c "
-	export PATH=\"\$PATH:/sbin:/usr/sbin\"
-	export DEBIAN_FRONTEND=noninteractive
-
-	# Génération de la locale fr_FR.UTF-8
-	echo 'fr_FR.UTF-8 UTF-8' >> /etc/locale.gen
-	locale-gen
-	update-locale LANG=fr_FR.UTF-8
-
-	# Mise à jour et installation des paquets
-	apt update
-	apt install -y ssh sudo
-
-	# Création de l'utilisateur
-	useradd -m -s /bin/bash '$username'
-	echo '$username:$password' | chpasswd
-
-	# Ajout au groupe sudo
-	usermod -aG sudo '$username'
-"
-
-msg "=== Conteneur '$ct_name' initialisé avec succès ===" 10
-msg "Utilisateur: $username" 11
-
-# Affichage des informations du conteneur
-ct_ip=$(sudo lxc-ls -f | grep "^$ct_name " | awk '{print $5}')
-msg "Adresse IP: $ct_ip" 11
-msg "Connexion SSH: ssh $username@$ct_ip" 11
 
 exit 0
 
