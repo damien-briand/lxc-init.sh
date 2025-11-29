@@ -16,6 +16,7 @@ architecture="amd64"
 username="user"
 password=""
 keyserver="hkp://keyserver.ubuntu.com"
+interface="cli"
 
 # Fonctions Utilitaire
 msg() {
@@ -30,24 +31,29 @@ error() {
 
 usage() {
 	cat <<- EOF
-		Usage: $myself -n NOM [-u USER] [-p PASS] [-d DISTRO] [-r RELEASE] [-a ARCH] [-h]
+		Usage: $myself -n NOM [-u USER] [-p PASS] [-d DISTRO] [-r RELEASE] [-a ARCH] [-g] [-h]
 		Où:
-		    -n, --name         : nom du conteneur (obligatoire)
+		    -n, --name         : nom du conteneur (obligatoire en mode CLI)
 		    -u, --user         : nom de l'utilisateur à créer (défaut: user)
 		    -p, --password     : mot de passe de l'utilisateur (demandé si non fourni)
 		    -d, --distribution : distribution à installer (défaut: debian)
 		    -r, --release      : version de la distribution (défaut: trixie)
 		    -a, --architecture : architecture du conteneur (défaut: amd64)
+		    -g, --graphique    : interface graphique avec zenity
 		    -h, --help         : affiche cette aide
+		
+		Note: En mode graphique, lancez le script SANS sudo, il demandera les droits root quand nécessaire
 	EOF
 }
 
+
 # Gestion des options
-opts=$(getopt -o n:u:p:d:r:a:h --long name:,user:,password:,distribution:,release:,architecture:,help -n "$myself" -- "$@") \
+opts=$(getopt -o n:u:p:d:r:a:gh --long name:,user:,password:,distribution:,release:,architecture:,graphique,gui-create,help -n "$myself" -- "$@") \
 	|| error "getopt failed with error code: $?" 1
 eval set -- "$opts"
 
 ct_name=""
+gui_create_mode=false
 
 while true; do
 	case "$1" in
@@ -57,6 +63,8 @@ while true; do
 		-d|--distribution) distribution="$2"; shift 2 ;;
 		-r|--release) release="$2"; shift 2 ;;
 		-a|--architecture) architecture="$2"; shift 2 ;;
+		-g|--graphique) interface="gui"; shift ;;
+		--gui-create) gui_create_mode=true; shift ;;
 		-h|--help) usage; exit 0 ;;
 		--) shift; break ;;
 		*) break ;;
@@ -65,11 +73,16 @@ done
 
 # Vérifications
 [ -n "$ct_name" ] || { usage; error "Le nom du conteneur est obligatoire (-n)" 1; }
-[ "$(id -u)" -eq 0 ] || error "Ce script doit être exécuté en root (sudo)" 2
 [ -x "$(which lxc-create)" ] || error "LXC n'est pas installé. Essayez: sudo apt install lxc" 3
+
+# Demande des droits sudo
+msg "Demande des droits sudo" 10
+sudo -k
+sudo -v
 
 # Demande du mot de passe si non fourni
 if [ -z "$password" ]; then
+    msg "Mot de passe pour votre conteneur" 10
 	read -r -s -p "Mot de passe pour l'utilisateur '$username': " password
 	printf "\n"
 	read -r -s -p "Confirmez le mot de passe: " password_confirm
@@ -78,18 +91,18 @@ if [ -z "$password" ]; then
 fi
 
 # Vérifier si le conteneur existe déjà
-if lxc-ls | grep -qw "$ct_name"; then
+if sudo lxc-ls | grep -qw "$ct_name"; then
 	error "Le conteneur '$ct_name' existe déjà" 5
 fi
 
 msg "=== Création du conteneur '$ct_name' ===" 11
-lxc-create -t download -n "$ct_name" -- \
+sudo lxc-create -t download -n "$ct_name" -- \
 	-d "$distribution" \
 	-r "$release" \
 	-a "$architecture"
 
 msg "=== Démarrage du conteneur ===" 11
-lxc-start -n "$ct_name"
+sudo lxc-start -n "$ct_name"
 
 msg "Attente du démarrage du conteneur..." 10
 sleep 3
@@ -97,7 +110,7 @@ sleep 3
 msg "=== Configuration du conteneur ===" 11
 
 # Script d'initialisation exécuté dans le conteneur
-lxc-attach -n "$ct_name" -- bash -c "
+sudo lxc-attach -n "$ct_name" -- bash -c "
 	export PATH=\"\$PATH:/sbin:/usr/sbin\"
 	export DEBIAN_FRONTEND=noninteractive
 
@@ -122,8 +135,9 @@ msg "=== Conteneur '$ct_name' initialisé avec succès ===" 10
 msg "Utilisateur: $username" 11
 
 # Affichage des informations du conteneur
-ct_ip=$(lxc-ls -f | grep "^$ct_name " | awk '{print $5}')
+ct_ip=$(sudo lxc-ls -f | grep "^$ct_name " | awk '{print $5}')
 msg "Adresse IP: $ct_ip" 11
 msg "Connexion SSH: ssh $username@$ct_ip" 11
 
 exit 0
+
