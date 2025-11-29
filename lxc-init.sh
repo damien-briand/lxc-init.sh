@@ -80,6 +80,10 @@ sudo -v
 
 
 gui_interface() {
+	# Vérification de zenity
+	[ -x "$(which zenity)" ] || error "Zenity n'est pas installé. Essayez: sudo apt install zenity" 10
+
+	# Demande du nom du conteneur
 	ct_name=$(zenity --entry \
 		--title="Nom du conteneur" \
 		--text="Entrez le nom du conteneur:" \
@@ -87,19 +91,63 @@ gui_interface() {
 		--width=400 2>/dev/null)
 	[ -n "$ct_name" ] || { msg "Annulation." 9; exit 0; }
 
+	# Vérifier si le conteneur existe déjà (nécessite sudo)
+	if sudo lxc-ls 2>/dev/null | grep -qw "$ct_name"; then
+		zenity --error --text="Le conteneur '$ct_name' existe déjà !" --width=300 2>/dev/null
+		exit 5
+	fi
 
-    username=$(zenity --entry \
+	# Demande du nom d'utilisateur
+	username=$(zenity --entry \
 		--title="Nom d'utilisateur" \
 		--text="Entrez le nom d'utilisateur:" \
 		--entry-text="user" \
 		--width=400 2>/dev/null)
 	[ -n "$username" ] || { msg "Annulation." 9; exit 0; }
-    
+
+	# Demande du mot de passe
 	password=$(zenity --password \
 		--title="Mot de passe" \
 		--text="Entrez le mot de passe pour l'utilisateur '$username':" \
 		--width=400 2>/dev/null)
 	[ -n "$password" ] || { msg "Annulation." 9; exit 0; }
+
+	# Choix de la distribution
+	distro_choice=$(zenity --list \
+		--title="Distribution" \
+		--text="Choisissez la distribution:" \
+		--column="Distribution" --column="Version" --column="Architecture" \
+		"debian" "trixie" "amd64" \
+		"debian" "bookworm" "amd64" \
+		"ubuntu" "noble" "amd64" \
+		"ubuntu" "jammy" "amd64" \
+		--width=500 --height=300 --hide-column=1 --print-column=1,2,3 2>/dev/null)
+	
+	if [ -n "$distro_choice" ]; then
+		distribution=$(echo "$distro_choice" | cut -d'|' -f1)
+		release=$(echo "$distro_choice" | cut -d'|' -f2)
+		architecture=$(echo "$distro_choice" | cut -d'|' -f3)
+	fi
+
+	# Affichage des informations avant création
+	zenity --question \
+		--title="Confirmation" \
+		--text="Création du conteneur avec les paramètres suivants:
+
+        Nom: $ct_name
+        Utilisateur: $username
+        Distribution: $distribution
+        Version: $release
+        Architecture: $architecture
+
+        Voulez-vous continuer ?" \
+	--width=400 2>/dev/null || { msg "Annulation." 9; exit 0; }
+	
+	# Relancer le script en mode root pour la création
+	msg "Lancement de la création du conteneur (sudo requis)..." 11
+	sudo "$0" --name "$ct_name" --user "$username" --password "$password" \
+		--distribution "$distribution" --release "$release" --architecture "$architecture" \
+		--gui-create
 }
 
 cli_interface() {    
@@ -162,6 +210,14 @@ cli_interface() {
     msg "Adresse IP: $ct_ip" 11
     msg "Connexion SSH: ssh $username@$ct_ip" 11
 }
+
+if [ "$interface" = "gui" ]; then
+	gui_interface
+else
+	[ -x "$(which lxc-create)" ] || error "LXC n'est pas installé. Essayez: sudo apt install lxc" 3
+	cli_interface
+	create_container
+fi
 
 exit 0
 
